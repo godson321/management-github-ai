@@ -1,0 +1,22 @@
+{
+  "id": "IMPL-1",
+  "title": "Scaffold the package layout, repository persistence, and repository discovery",
+  "description": "Create the Python package structure, define core models, persist tracked repositories, and discover repos from one or more input paths.",
+  "depends_on": [],
+  "scope": "src/**;main.py;.gitignore",
+  "convergence": {
+    "criteria": [
+      "Application package and entry point exist",
+      "Repository store can save and load tracked paths",
+      "Discovery service finds repos from roots and explicit paths"
+    ],
+    "verification": [
+      "python -m unittest discover -s tests -v"
+    ]
+  },
+  "meta": {
+    "type": "feature",
+    "agent": "code-developer"
+  },
+  "status": "completed"
+}

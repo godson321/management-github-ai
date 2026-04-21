@@ -1,0 +1,42 @@
+{
+  "session_id": "BS-2026-04-21-github-batch-manager",
+  "topic": "GitHub batch manager desktop MVP",
+  "scope_items": [
+    {
+      "title": "Repository intake",
+      "description": "Import repositories by scanning root folders or entering multiple explicit paths.",
+      "implementation_approach": [
+        "Persist unique repository paths to local JSON",
+        "Detect repos by `.git` directory or `.git` file"
+      ],
+      "priority": "high",
+      "estimated_complexity": "low"
+    },
+    {
+      "title": "Batch git actions",
+      "description": "Run refresh, pull, commit, and push across selected repositories with clear per-repo results.",
+      "implementation_approach": [
+        "Wrap git CLI commands in a service",
+        "Run batch operations on worker threads",
+        "Collect structured success and error messages"
+      ],
+      "priority": "high",
+      "estimated_complexity": "medium"
+    },
+    {
+      "title": "Git log tree",
+      "description": "Show a readable history graph for the highlighted repository.",
+      "implementation_approach": [
+        "Use `git log --graph --decorate --oneline --all`",
+        "Render the graph in a monospaced log panel"
+      ],
+      "priority": "medium",
+      "estimated_complexity": "low"
+    }
+  ],
+  "recommended_workflow": "workflow-plan",
+  "_metadata": {
+    "generated": "2026-04-21T21:15:30+08:00",
+    "source_session": "BS-2026-04-21-github-batch-manager"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "IMPL-3",
+  "title": "Build the Tkinter UI with batch selection, dialogs, and log tree display",
+  "description": "Create the main desktop window, batch action toolbar, repository grid, path import dialogs, and a monospaced log tree panel for the active repository.",
+  "depends_on": [
+    "IMPL-1",
+    "IMPL-2"
+  ],
+  "scope": "src/**;main.py",
+  "convergence": {
+    "criteria": [
+      "User can import repositories from folder scan or pasted paths",
+      "User can select multiple repositories and trigger batch actions",
+      "Selected repository shows details and a log tree"
+    ],
+    "verification": [
+      "python -m unittest discover -s tests -v"
+    ]
+  },
+  "meta": {
+    "type": "feature",
+    "agent": "code-developer"
+  },
+  "status": "completed"
+}

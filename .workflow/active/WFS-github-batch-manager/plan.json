@@ -1,0 +1,23 @@
+{
+  "task_ids": [
+    "IMPL-1",
+    "IMPL-2",
+    "IMPL-3",
+    "IMPL-4"
+  ],
+  "recommended_execution": "Sequential",
+  "complexity": "medium",
+  "shared_context": {
+    "tech_stack": [
+      "Python 3.13",
+      "Tkinter",
+      "git CLI",
+      "unittest"
+    ],
+    "constraints": [
+      "standard library only",
+      "Windows-friendly desktop UX",
+      "offline-friendly implementation"
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "IMPL-4",
+  "title": "Add unit tests, update documentation, and run validation",
+  "description": "Cover the main services with unittest, document how to run the app, and verify the project with the local test suite.",
+  "depends_on": [
+    "IMPL-1",
+    "IMPL-2",
+    "IMPL-3"
+  ],
+  "scope": "README.md;tests/**;src/**",
+  "convergence": {
+    "criteria": [
+      "Core services have automated tests",
+      "README explains the MVP features and run steps",
+      "Validation command passes locally"
+    ],
+    "verification": [
+      "python -m unittest discover -s tests -v"
+    ]
+  },
+  "meta": {
+    "type": "test-gen",
+    "agent": "code-developer"
+  },
+  "status": "completed"
+}

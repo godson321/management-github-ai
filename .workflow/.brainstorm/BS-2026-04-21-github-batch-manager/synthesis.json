@@ -1,0 +1,41 @@
+{
+  "session_id": "BS-2026-04-21-github-batch-manager",
+  "topic": "GitHub batch manager desktop MVP",
+  "completed": "2026-04-21T21:15:30+08:00",
+  "top_ideas": [
+    {
+      "title": "Offline-first local repository dashboard",
+      "description": "Use the local git CLI to manage many repositories without introducing GitHub API auth or cloud dependencies.",
+      "score": 10,
+      "novelty": 3,
+      "feasibility": 5,
+      "key_strengths": [
+        "No network dependency beyond git remotes",
+        "Works with any local GitHub clone",
+        "Straightforward to test"
+      ],
+      "main_challenges": [
+        "Need robust subprocess error handling",
+        "Need background execution to avoid freezing the UI"
+      ],
+      "next_steps": [
+        "Create repository discovery and persistence services",
+        "Build batch git action helpers",
+        "Add a log tree panel"
+      ],
+      "review_status": "accepted"
+    }
+  ],
+  "recommendations": {
+    "primary": "Implement a Python + Tkinter MVP with a repository table, batch actions, and a git graph viewer.",
+    "alternatives": [
+      "Later migrate to a richer desktop shell if the product needs advanced visuals or plugins."
+    ]
+  },
+  "follow_up": [
+    {
+      "type": "implement",
+      "summary": "Create a greenfield desktop MVP with testable services and a single-window workflow."
+    }
+  ]
+}

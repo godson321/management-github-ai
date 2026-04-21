@@ -1,0 +1,32 @@
+{
+  "critical_files": [
+    "README.md"
+  ],
+  "patterns": [],
+  "dependencies": [
+    "Python 3.13",
+    "Tk 8.6",
+    "git CLI"
+  ],
+  "integration_points": [
+    {
+      "module": "discovery",
+      "description": "Import repositories from user-provided paths."
+    },
+    {
+      "module": "git_service",
+      "description": "Run git commands and surface structured results."
+    },
+    {
+      "module": "ui",
+      "description": "Present batch actions and selected-repository log view."
+    }
+  ],
+  "conflict_risk": "none",
+  "conflict_areas": [],
+  "constraints": [
+    "empty repository",
+    "prefer standard library only",
+    "must be testable without external services"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "id": "IMPL-2",
+  "title": "Implement git command execution, status parsing, log loading, and batch operations",
+  "description": "Wrap git CLI commands in a service that can refresh repo snapshots, pull, commit staged changes, push, and load log graph output.",
+  "depends_on": [
+    "IMPL-1"
+  ],
+  "scope": "src/**;tests/**",
+  "convergence": {
+    "criteria": [
+      "Git service returns structured repository snapshots",
+      "Batch operation helper reports per-repository results",
+      "Log graph output is available for the selected repository"
+    ],
+    "verification": [
+      "python -m unittest discover -s tests -v"
+    ]
+  },
+  "meta": {
+    "type": "feature",
+    "agent": "code-developer"
+  },
+  "status": "completed"
+}
