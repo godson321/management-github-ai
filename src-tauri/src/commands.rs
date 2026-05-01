@@ -1,11 +1,14 @@
 use crate::discovery;
 use crate::git_service::GitRepositoryService;
 use crate::models::{
-    AppState, BatchProgressEvent, GitCommitView, GitLogResult, OperationResult,
-    RepositoryOperationResult, RepositoryRecord, AppUiState,
+    AppState, AppUiState, BatchProgressEvent, GitCommitView, GitLogResult, OperationResult,
+    RepositoryOperationResult, RepositoryRecord, WindowsExplorerMenuItem,
+    WindowsExplorerMenuResponse,
 };
 use crate::store::RepositoryStore;
+use serde_json::Value;
 use std::path::Path;
+use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
@@ -94,6 +97,104 @@ pub async fn load_commit_view(path: String, commit_hash: String) -> Result<GitCo
     Ok(service.load_commit_view(Path::new(&path), &commit_hash))
 }
 
+#[tauri::command]
+pub async fn open_repository_folder(path: String) -> Result<(), String> {
+    let target_path = Path::new(&path);
+    if !target_path.exists() {
+        return Err(format!("仓库目录不存在: {}", target_path.display()));
+    }
+    if !target_path.is_dir() {
+        return Err(format!("目标不是目录: {}", target_path.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .arg(target_path)
+            .spawn()
+            .map_err(|error| format!("无法打开仓库目录: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(target_path)
+            .spawn()
+            .map_err(|error| format!("无法打开仓库目录: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(target_path)
+            .spawn()
+            .map_err(|error| format!("无法打开仓库目录: {error}"))?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("当前平台不支持打开仓库目录。".to_string())
+}
+
+#[tauri::command]
+pub async fn list_windows_explorer_menu_items(path: String) -> Result<WindowsExplorerMenuResponse, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        return Ok(WindowsExplorerMenuResponse {
+            supported: false,
+            items: Vec::new(),
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let target_path = Path::new(&path);
+        if !target_path.exists() {
+            return Err(format!("仓库目录不存在: {}", target_path.display()));
+        }
+        if !target_path.is_dir() {
+            return Err(format!("目标不是目录: {}", target_path.display()));
+        }
+
+        let stdout = run_powershell_script(
+            LIST_FOLDER_MENU_SCRIPT,
+            target_path,
+            None,
+        )?;
+        let items = parse_windows_explorer_menu_items(&stdout)?;
+        Ok(WindowsExplorerMenuResponse {
+            supported: true,
+            items,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn invoke_windows_explorer_menu_item(path: String, verb_index: u32) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (path, verb_index);
+        return Err("Windows Explorer 菜单仅支持 Windows。".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let target_path = Path::new(&path);
+        if !target_path.exists() {
+            return Err(format!("仓库目录不存在: {}", target_path.display()));
+        }
+        if !target_path.is_dir() {
+            return Err(format!("目标不是目录: {}", target_path.display()));
+        }
+
+        run_powershell_script(INVOKE_FOLDER_MENU_SCRIPT, target_path, Some(verb_index))?;
+        Ok(())
+    }
+}
+
 fn run_batch(
     app: AppHandle,
     repositories: Vec<RepositoryRecord>,
@@ -176,4 +277,192 @@ fn summarize_result_message(result: &OperationResult) -> String {
         first_line.push_str("...");
     }
     format!("{prefix}: {first_line}")
+}
+
+#[cfg(target_os = "windows")]
+const POWERSHELL_ENCODING_PREFIX: &str = "[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $OutputEncoding=[Text.UTF8Encoding]::new($false); ";
+
+#[cfg(target_os = "windows")]
+const LIST_FOLDER_MENU_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$targetPath = $env:GBM_TARGET_PATH
+if ([string]::IsNullOrWhiteSpace($targetPath)) {
+    throw 'Missing target path.'
+}
+if (-not (Test-Path -LiteralPath $targetPath -PathType Container)) {
+    throw "Folder not found: $targetPath"
+}
+$shell = New-Object -ComObject Shell.Application
+$namespace = $shell.Namespace($targetPath)
+if ($null -eq $namespace) {
+    throw "Unable to access shell namespace: $targetPath"
+}
+$item = $namespace.Self
+if ($null -eq $item) {
+    throw "Unable to resolve shell item: $targetPath"
+}
+$items = @()
+$index = 0
+foreach ($verb in @($item.Verbs())) {
+    $items += [PSCustomObject]@{
+        index = $index
+        name = [string]$verb.Name
+    }
+    $index++
+}
+$items | ConvertTo-Json -Compress
+"#;
+
+#[cfg(target_os = "windows")]
+const INVOKE_FOLDER_MENU_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+$targetPath = $env:GBM_TARGET_PATH
+$verbIndexText = $env:GBM_VERB_INDEX
+if ([string]::IsNullOrWhiteSpace($targetPath)) {
+    throw 'Missing target path.'
+}
+if ([string]::IsNullOrWhiteSpace($verbIndexText)) {
+    throw 'Missing verb index.'
+}
+if (-not (Test-Path -LiteralPath $targetPath -PathType Container)) {
+    throw "Folder not found: $targetPath"
+}
+$verbIndex = [int]$verbIndexText
+$shell = New-Object -ComObject Shell.Application
+$namespace = $shell.Namespace($targetPath)
+if ($null -eq $namespace) {
+    throw "Unable to access shell namespace: $targetPath"
+}
+$item = $namespace.Self
+if ($null -eq $item) {
+    throw "Unable to resolve shell item: $targetPath"
+}
+$verbs = @($item.Verbs())
+if ($verbIndex -lt 0 -or $verbIndex -ge $verbs.Count) {
+    throw "Verb index out of range: $verbIndex"
+}
+$verbs[$verbIndex].DoIt()
+"#;
+
+#[cfg(target_os = "windows")]
+fn run_powershell_script(
+    script: &str,
+    folder_path: &Path,
+    verb_index: Option<u32>,
+) -> Result<String, String> {
+    let mut command = Command::new("powershell.exe");
+    command
+        .arg("-NoLogo")
+        .arg("-NoProfile")
+        .arg("-NonInteractive")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(format!("{POWERSHELL_ENCODING_PREFIX}{script}"))
+        .env("GBM_TARGET_PATH", folder_path.as_os_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    match verb_index {
+        Some(index) => {
+            command.env("GBM_VERB_INDEX", index.to_string());
+        }
+        None => {
+            command.env_remove("GBM_VERB_INDEX");
+        }
+    }
+
+    let output = command
+        .spawn()
+        .and_then(|child| child.wait_with_output())
+        .map_err(|error| format!("无法执行 PowerShell 命令: {error}"))?;
+
+    if output.status.success() {
+        return String::from_utf8(output.stdout)
+            .map_err(|error| format!("PowerShell 输出不是有效 UTF-8: {error}"));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let message = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "Unknown Windows shell error.".to_string()
+    };
+    Err(message)
+}
+
+#[cfg(target_os = "windows")]
+fn parse_windows_explorer_menu_items(stdout: &str) -> Result<Vec<WindowsExplorerMenuItem>, String> {
+    let payload = stdout.trim();
+    if payload.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let decoded: Value =
+        serde_json::from_str(payload).map_err(|error| format!("无法解析资源管理器菜单: {error}"))?;
+    let rows = match decoded {
+        Value::Array(items) => items,
+        Value::Object(item) => vec![Value::Object(item)],
+        _ => return Err("资源管理器菜单返回了无效数据。".to_string()),
+    };
+
+    let mut items = Vec::new();
+    let mut previous_was_separator = true;
+    for row in rows {
+        let Value::Object(map) = row else {
+            continue;
+        };
+
+        let raw_label = map
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let normalized_label = normalize_shell_menu_label(raw_label);
+        if normalized_label.is_empty() {
+            if !previous_was_separator {
+                items.push(WindowsExplorerMenuItem {
+                    label: String::new(),
+                    verb_index: None,
+                    is_separator: true,
+                });
+                previous_was_separator = true;
+            }
+            continue;
+        }
+
+        let Some(raw_index) = map.get("index").and_then(Value::as_u64) else {
+            continue;
+        };
+
+        let verb_index = u32::try_from(raw_index)
+            .map_err(|_| format!("无效的 Explorer 菜单索引: {raw_index}"))?;
+        items.push(WindowsExplorerMenuItem {
+            label: normalized_label,
+            verb_index: Some(verb_index),
+            is_separator: false,
+        });
+        previous_was_separator = false;
+    }
+
+    while matches!(items.last(), Some(item) if item.is_separator) {
+        items.pop();
+    }
+
+    Ok(items)
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_shell_menu_label(raw_label: &str) -> String {
+    let without_ampersand = raw_label.replace('&', "");
+    let flattened = without_ampersand.replace('\r', " ").replace('\n', " ");
+    let trimmed = if let Some((label, _)) = flattened.split_once('\t') {
+        label.trim().to_string()
+    } else {
+        flattened.trim().to_string()
+    };
+    trimmed.split_whitespace().collect::<Vec<_>>().join(" ")
 }

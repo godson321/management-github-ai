@@ -207,6 +207,21 @@ pub struct GitCommitView {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct WindowsExplorerMenuItem {
+    pub label: String,
+    pub verb_index: Option<u32>,
+    pub is_separator: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowsExplorerMenuResponse {
+    pub supported: bool,
+    pub items: Vec<WindowsExplorerMenuItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct AppState {
     pub repositories: Vec<RepositoryRecord>,
     #[serde(default)]

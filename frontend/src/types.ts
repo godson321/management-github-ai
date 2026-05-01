@@ -97,3 +97,14 @@ export interface ActivityItem {
   level: "info" | "success" | "warning" | "danger";
   text: string;
 }
+
+export interface WindowsExplorerMenuItem {
+  label: string;
+  verbIndex: number | null;
+  isSeparator: boolean;
+}
+
+export interface WindowsExplorerMenuResponse {
+  supported: boolean;
+  items: WindowsExplorerMenuItem[];
+}

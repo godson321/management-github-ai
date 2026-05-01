@@ -344,6 +344,112 @@ textarea {
   margin-top: 8px;
 }
 
+.repo-context-menu {
+  position: fixed;
+  z-index: 3000;
+  min-width: 188px;
+  max-width: 240px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.16);
+  padding: 6px;
+  overflow: visible;
+}
+
+.repo-context-menu-separator {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+.repo-context-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.repo-context-menu-item.hasChildren {
+  padding-right: 30px;
+}
+
+.repo-context-menu-item.hasChildren::after {
+  position: absolute;
+  top: -8px;
+  right: -18px;
+  bottom: -8px;
+  width: 24px;
+  content: "";
+}
+
+.repo-context-menu.submenu-left .repo-context-menu-item.hasChildren::after {
+  right: auto;
+  left: -18px;
+}
+
+.repo-context-menu-item:hover {
+  background: #eef6f5;
+}
+
+.repo-context-menu-item.disabled,
+.repo-context-menu-item.loading {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.repo-context-menu-item.disabled:hover,
+.repo-context-menu-item.loading:hover {
+  background: transparent;
+}
+
+.repo-context-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.repo-context-menu-arrow {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.repo-context-menu-submenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% - 10px);
+  display: none;
+  min-width: 168px;
+  max-height: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.16);
+  padding: 6px;
+  overflow: visible;
+}
+
+.repo-context-menu.submenu-left .repo-context-menu-submenu {
+  left: auto;
+  right: calc(100% - 10px);
+}
+
+.repo-context-menu.submenu-up .repo-context-menu-submenu {
+  top: auto;
+  bottom: 6px;
+}
+
+.repo-context-menu-item.hasChildren:hover > .repo-context-menu-submenu,
+.repo-context-menu-submenu:hover {
+  display: block;
+}
+
 .selected-row,
 .selected-row > td {
   background: #e9f7f5 !important;

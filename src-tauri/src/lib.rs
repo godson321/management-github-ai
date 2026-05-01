@@ -18,6 +18,9 @@ pub fn run() {
             commands::push_repositories,
             commands::load_log_entries,
             commands::load_commit_view,
+            commands::open_repository_folder,
+            commands::list_windows_explorer_menu_items,
+            commands::invoke_windows_explorer_menu_item,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitHub Batch Manager");

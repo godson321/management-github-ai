@@ -29,6 +29,8 @@ import type {
   OperationStatus,
   RepositoryOperationResult,
   RepositoryRecord,
+  WindowsExplorerMenuItem,
+  WindowsExplorerMenuResponse,
 } from "./types";
 
 const invoke = window.__TAURI__?.core?.invoke;
@@ -52,7 +54,45 @@ const columnSettingsVisible = ref(false);
 const repoTableRef = ref<VxeTableInstance<RepositoryRecord> | null>(null);
 const workspaceRef = ref<HTMLElement | null>(null);
 const contentGridRef = ref<HTMLElement | null>(null);
+const repoContextMenuRef = ref<HTMLElement | null>(null);
+const repoContextMenuVisible = ref(false);
+const repoContextMenuX = ref(0);
+const repoContextMenuY = ref(0);
+const repoContextMenuRepositoryPath = ref("");
+const explorerMenuLoading = ref(false);
+const explorerMenuSupported = ref(false);
+const explorerMenuItems = ref<WindowsExplorerMenuItem[]>([]);
+const repoContextMenuSubmenuSide = ref<"left" | "right">("right");
+const repoContextMenuSubmenuVerticalSide = ref<"up" | "down">("down");
 let activityId = 0;
+let explorerMenuRequestId = 0;
+
+type RepositoryActionKind = "refresh" | "pull" | "commit" | "push";
+type PullStrategy = "merge" | "ff_only" | "rebase";
+type RepoMenuOptionCode =
+  | "toggle-selected"
+  | "refresh"
+  | "commit"
+  | "push"
+  | "open-folder"
+  | "copy-path"
+  | "select-all"
+  | "clear-selection"
+  | `pull:${PullStrategy}`
+  | `explorer:${number}`;
+
+interface ContextMenuOption {
+  code?: RepoMenuOptionCode;
+  name?: string;
+  disabled?: boolean;
+  loading?: boolean;
+  children?: ContextMenuOption[];
+  params?: Record<string, unknown>;
+}
+
+type ContextMenuSubmenuStyle = {
+  top?: string;
+};
 
 type RepositoryColumnKey =
   | "name"
@@ -305,6 +345,64 @@ const operationStatusFilters = [
   { label: "跳过", value: "skipped" },
 ];
 
+const currentContextRepository = computed(
+  () => repositories.value.find((repository) => repository.path === repoContextMenuRepositoryPath.value) ?? null,
+);
+
+const repoContextMenuStyle = computed(() => ({
+  left: `${repoContextMenuX.value}px`,
+  top: `${repoContextMenuY.value}px`,
+}));
+
+const repoContextMenuClass = computed(() => ({
+  "submenu-left": repoContextMenuSubmenuSide.value === "left",
+  "submenu-up": repoContextMenuSubmenuVerticalSide.value === "up",
+}));
+const repoContextMenuSubmenuStyles = reactive<Record<string, ContextMenuSubmenuStyle>>({});
+
+const repoContextMenuOptions = computed<ContextMenuOption[][]>(() => {
+  const repository = currentContextRepository.value;
+  const explorerChildren = buildExplorerMenuChildren();
+
+  return [
+    [
+      {
+        code: "toggle-selected",
+        name: repository?.selected ? "取消勾选" : "勾选仓库",
+        disabled: !repository,
+      },
+    ],
+    [
+      { code: "refresh", name: "刷新", disabled: busy.value || !repository },
+      {
+        name: "拉取",
+        disabled: busy.value || !repository,
+        children: pullStrategyOptions.map((option) => ({
+          code: `pull:${option.value}`,
+          name: option.label,
+          disabled: busy.value || !repository,
+        })),
+      },
+      { code: "commit", name: "提交...", disabled: busy.value || !repository },
+      { code: "push", name: "推送", disabled: busy.value || !repository },
+    ],
+    [
+      {
+        name: "Windows 资源管理",
+        disabled: !repository || (!explorerMenuSupported.value && !explorerMenuLoading.value),
+        loading: Boolean(repository) && explorerMenuLoading.value,
+        children: explorerChildren,
+      },
+      { code: "open-folder", name: "打开文件夹", disabled: !repository },
+      { code: "copy-path", name: "复制仓库路径", disabled: !repository },
+    ],
+    [
+      { code: "select-all", name: "全选全部仓库", disabled: !repositories.value.length },
+      { code: "clear-selection", name: "清空全部勾选", disabled: !selectedRepositories.value.length },
+    ],
+  ];
+});
+
 const logSummary = computed(() => {
   const repository = selectedRepository.value;
   if (!repository) {
@@ -544,6 +642,321 @@ function mergeRepositories(nextRepositories: RepositoryRecord[]) {
   }
 }
 
+function buildExplorerMenuChildren(): ContextMenuOption[] {
+  if (!currentContextRepository.value) {
+    return [];
+  }
+  if (explorerMenuLoading.value) {
+    return [{ name: "加载中...", disabled: true }];
+  }
+  if (!explorerMenuSupported.value) {
+    return [{ name: "仅支持 Windows", disabled: true }];
+  }
+  if (!explorerMenuItems.value.length) {
+    return [{ name: "没有可用菜单项", disabled: true }];
+  }
+  return explorerMenuItems.value.map((item, index) => ({
+    code: item.isSeparator ? undefined : `explorer:${item.verbIndex}`,
+    name: item.isSeparator ? "────────" : item.label,
+    disabled: item.isSeparator || item.verbIndex === null || busy.value,
+    params: { separator: item.isSeparator, index },
+  }));
+}
+
+function closeRepoContextMenu() {
+  explorerMenuRequestId += 1;
+  repoContextMenuVisible.value = false;
+  repoContextMenuRepositoryPath.value = "";
+  explorerMenuLoading.value = false;
+  repoContextMenuSubmenuSide.value = "right";
+  repoContextMenuSubmenuVerticalSide.value = "down";
+  clearRepoContextMenuSubmenuStyles();
+}
+
+function updateRepoContextMenuPosition() {
+  nextTick(() => {
+    if (!repoContextMenuVisible.value || !repoContextMenuRef.value) {
+      return;
+    }
+    const margin = 12;
+    const menuWidth = repoContextMenuRef.value.offsetWidth;
+    const menuHeight = repoContextMenuRef.value.offsetHeight;
+    const maxX = Math.max(margin, window.innerWidth - menuWidth - margin);
+    const maxY = Math.max(margin, window.innerHeight - menuHeight - margin);
+    repoContextMenuX.value = clamp(repoContextMenuX.value, margin, maxX);
+    repoContextMenuY.value = clamp(repoContextMenuY.value, margin, maxY);
+  });
+}
+
+function contextMenuOptionKey(option: ContextMenuOption) {
+  return option.code || option.name || "";
+}
+
+function clearRepoContextMenuSubmenuStyles() {
+  for (const key of Object.keys(repoContextMenuSubmenuStyles)) {
+    delete repoContextMenuSubmenuStyles[key];
+  }
+}
+
+function getRepoContextMenuSubmenuStyle(option: ContextMenuOption) {
+  return repoContextMenuSubmenuStyles[contextMenuOptionKey(option)];
+}
+
+function updateRepoContextMenuSubmenuStyle(option: ContextMenuOption, anchor: HTMLElement) {
+  if (!option.children?.length) {
+    return;
+  }
+  window.requestAnimationFrame(() => {
+    const submenu = anchor.querySelector(".repo-context-menu-submenu");
+    if (!(submenu instanceof HTMLElement)) {
+      return;
+    }
+    const margin = 12;
+    const baseTop = -6;
+    const submenuHeight = submenu.offsetHeight;
+    const anchorRect = anchor.getBoundingClientRect();
+    const targetViewportTop = clamp(
+      anchorRect.top + baseTop,
+      margin,
+      Math.max(margin, window.innerHeight - submenuHeight - margin),
+    );
+    repoContextMenuSubmenuStyles[contextMenuOptionKey(option)] = {
+      top: `${targetViewportTop - anchorRect.top}px`,
+    };
+  });
+}
+
+function handleRepoContextMenuItemEnter(option: ContextMenuOption, event: MouseEvent) {
+  const anchor = event.currentTarget;
+  if (!(anchor instanceof HTMLElement)) {
+    return;
+  }
+  updateRepoContextMenuSubmenuStyle(option, anchor);
+}
+
+function updateExplorerContextMenuSubmenuStyle() {
+  if (!repoContextMenuRef.value) {
+    return;
+  }
+  const explorerOption = repoContextMenuOptions.value
+    .flat()
+    .find((option) => option.name === "Windows 资源管理" && option.children?.length);
+  if (!explorerOption) {
+    return;
+  }
+  const anchors = Array.from(repoContextMenuRef.value.querySelectorAll<HTMLElement>(".repo-context-menu-item.hasChildren"));
+  const anchor = anchors.find((element) =>
+    element.querySelector(".repo-context-menu-label")?.textContent?.trim() === "Windows 资源管理",
+  );
+  if (!anchor) {
+    return;
+  }
+  updateRepoContextMenuSubmenuStyle(explorerOption, anchor);
+}
+
+async function loadExplorerMenuItems(repositoryPath: string) {
+  const tauriInvoke = ensureTauri();
+  const requestId = ++explorerMenuRequestId;
+  explorerMenuItems.value = [];
+  explorerMenuLoading.value = true;
+  clearRepoContextMenuSubmenuStyles();
+  try {
+    const response = await tauriInvoke<WindowsExplorerMenuResponse>("list_windows_explorer_menu_items", {
+      path: repositoryPath,
+    });
+    if (requestId !== explorerMenuRequestId || repoContextMenuRepositoryPath.value !== repositoryPath) {
+      return;
+    }
+    explorerMenuSupported.value = response.supported;
+    explorerMenuItems.value = response.items || [];
+  } catch (error) {
+    if (requestId !== explorerMenuRequestId || repoContextMenuRepositoryPath.value !== repositoryPath) {
+      return;
+    }
+    explorerMenuSupported.value = false;
+    explorerMenuItems.value = [];
+    addActivity(`加载 Windows 资源管理器菜单失败：${String(error)}`, "warning");
+  } finally {
+    if (requestId === explorerMenuRequestId && repoContextMenuRepositoryPath.value === repositoryPath) {
+      explorerMenuLoading.value = false;
+      updateRepoContextMenuPosition();
+      updateExplorerContextMenuSubmenuStyle();
+    }
+  }
+}
+
+async function openRepoContextMenu(repository: RepositoryRecord, event: MouseEvent) {
+  repoContextMenuRepositoryPath.value = repository.path;
+  selectRepository(repository);
+  repoContextMenuX.value = event.clientX;
+  repoContextMenuY.value = event.clientY;
+  repoContextMenuVisible.value = true;
+  repoContextMenuSubmenuSide.value = "right";
+  repoContextMenuSubmenuVerticalSide.value = "down";
+  clearRepoContextMenuSubmenuStyles();
+  updateRepoContextMenuPosition();
+  await loadExplorerMenuItems(repository.path);
+}
+
+function findRepositoryFromContextTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return null;
+  }
+  const rowElement = target.closest(".vxe-body--row[rowid]");
+  if (!(rowElement instanceof HTMLElement)) {
+    return null;
+  }
+  const table = repoTableRef.value as (VxeTableInstance<RepositoryRecord> & {
+    getRowNode?: (rowElement: Element) => { item?: RepositoryRecord } | null;
+  }) | null;
+  return table?.getRowNode?.(rowElement)?.item ?? null;
+}
+
+function handleRepoTableContextMenu(event: MouseEvent) {
+  event.preventDefault();
+  const repository = findRepositoryFromContextTarget(event.target);
+  if (!repository) {
+    closeRepoContextMenu();
+    return;
+  }
+  void openRepoContextMenu(repository, event);
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) {
+    throw new Error("当前环境不支持复制到剪贴板。");
+  }
+}
+
+async function setAllRepositoriesSelected(selected: boolean) {
+  for (const repository of repositories.value) {
+    repository.selected = selected;
+  }
+  await saveRepositories();
+  syncVxeSelection();
+}
+
+async function handleRepoContextMenuOptionClick(option: ContextMenuOption) {
+  if (!option.code || option.disabled) {
+    return;
+  }
+
+  const repository = currentContextRepository.value;
+  closeRepoContextMenu();
+
+  if (option.code.startsWith("pull:")) {
+    if (repository) {
+      await runRepositoryAction(repository, "pull", option.code.slice(5) as PullStrategy);
+    }
+    return;
+  }
+
+  if (option.code.startsWith("explorer:")) {
+    if (!repository) {
+      return;
+    }
+    try {
+      const tauriInvoke = ensureTauri();
+      const verbIndex = Number.parseInt(option.code.slice(9), 10);
+      await tauriInvoke("invoke_windows_explorer_menu_item", {
+        path: repository.path,
+        verbIndex,
+      });
+      statusText.value = `已执行 ${repository.name} 的 Windows 资源管理器命令`;
+    } catch (error) {
+      handleError("执行 Windows 资源管理器命令失败", error);
+    }
+    return;
+  }
+
+  if (!repository && option.code !== "select-all" && option.code !== "clear-selection") {
+    return;
+  }
+
+  switch (option.code) {
+    case "toggle-selected":
+      if (repository) {
+        const nextSelected = !repository.selected;
+        toggleRepository(repository, nextSelected);
+        syncVxeSelection();
+        statusText.value = nextSelected ? `已勾选 ${repository.name}` : `已取消勾选 ${repository.name}`;
+      }
+      return;
+    case "refresh":
+      if (repository) {
+        await runRepositoryAction(repository, "refresh");
+      }
+      return;
+    case "commit":
+      if (repository) {
+        await runRepositoryAction(repository, "commit");
+      }
+      return;
+    case "push":
+      if (repository) {
+        await runRepositoryAction(repository, "push");
+      }
+      return;
+    case "open-folder":
+      if (repository) {
+        try {
+          const tauriInvoke = ensureTauri();
+          await tauriInvoke("open_repository_folder", {
+            path: repository.path,
+          });
+        } catch (error) {
+          handleError("打开仓库文件夹失败", error);
+        }
+      }
+      return;
+    case "copy-path":
+      if (repository) {
+        try {
+          await copyTextToClipboard(repository.path);
+          statusText.value = `已复制 ${repository.name} 的仓库路径`;
+        } catch (error) {
+          handleError("复制仓库路径失败", error);
+        }
+      }
+      return;
+    case "select-all":
+      await setAllRepositoriesSelected(true);
+      statusText.value = "已全选全部仓库";
+      return;
+    case "clear-selection":
+      await setAllRepositoriesSelected(false);
+      statusText.value = "已清空全部勾选";
+      return;
+  }
+}
+
+function handleDocumentPointerDown(event: PointerEvent) {
+  if (!(event.target instanceof Element)) {
+    closeRepoContextMenu();
+    return;
+  }
+  if (event.target.closest(".repo-context-menu")) {
+    return;
+  }
+  closeRepoContextMenu();
+}
+
 async function loadInitialState() {
   if (!invoke) {
     statusText.value = "请在 Tauri 运行时中启动应用。";
@@ -678,7 +1091,62 @@ async function refreshRepositories(paths: string[] | null = null, manageBusy = t
   }
 }
 
-async function runOperation(kind: "pull" | "commit" | "push", strategy?: "merge" | "ff_only" | "rebase") {
+async function runRepositoryAction(
+  repository: RepositoryRecord,
+  kind: RepositoryActionKind,
+  strategy?: PullStrategy,
+) {
+  const tauriInvoke = ensureTauri();
+  const args: Record<string, unknown> = { repositories: [repository] };
+  let command = "";
+  let busyText = "";
+  if (kind === "refresh") {
+    command = "refresh_repositories";
+    busyText = `正在刷新 ${repository.name}...`;
+  } else if (kind === "pull") {
+    command = "pull_repositories";
+    args.strategy = strategy ?? "merge";
+    busyText = `正在拉取 ${repository.name}...`;
+  } else if (kind === "commit") {
+    const message = await promptCommitMessage();
+    if (!message) {
+      statusText.value = "已取消提交。";
+      return;
+    }
+    command = "commit_repositories";
+    args.message = message;
+    busyText = `正在提交 ${repository.name}...`;
+  } else {
+    command = "push_repositories";
+    busyText = `正在推送 ${repository.name}...`;
+  }
+
+  setBusy(true, busyText);
+  try {
+    if (kind === "refresh") {
+      const refreshed = await tauriInvoke<RepositoryRecord[]>(command, args);
+      applyRepositories(refreshed);
+      addActivity(`[刷新] ${repository.name} 已刷新。`, "success");
+    } else {
+      const results = await tauriInvoke<RepositoryOperationResult[]>(command, args);
+      for (const item of results) {
+        replaceRepository(item.repository);
+        addActivity(
+          `[${item.result.action}] ${item.result.repositoryName} - ${statusLabel(item.result.status)}：${item.result.message}`,
+          activityLevel(item.result.status),
+        );
+      }
+    }
+    await saveRepositories();
+    statusText.value = `${repository.name} 操作完成`;
+  } catch (error) {
+    handleError(`${repository.name} 操作失败`, error);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function runOperation(kind: "pull" | "commit" | "push", strategy?: PullStrategy) {
   const targets = selectedRepositories.value;
   if (!targets.length) {
     statusText.value = "没有选中的仓库。";
@@ -1450,6 +1918,7 @@ onMounted(async () => {
   await setupProgressListener();
   await loadInitialState();
   syncVxeSelection();
+  document.addEventListener("pointerdown", handleDocumentPointerDown, true);
   window.addEventListener("resize", scheduleLogGraphViewUpdate);
 });
 
@@ -1480,6 +1949,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("pointerup", stopLayoutResize);
   window.removeEventListener("pointercancel", stopLayoutResize);
   window.removeEventListener("resize", scheduleLogGraphViewUpdate);
+  document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
   document.body.classList.remove("layout-resizing");
   delete document.body.dataset.layoutResizeAxis;
 });
@@ -1574,7 +2044,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-            <div id="repoTable" class="repo-vxe-table">
+            <div id="repoTable" class="repo-vxe-table" @contextmenu.prevent="handleRepoTableContextMenu">
               <vxe-table
                 ref="repoTableRef"
                   :data="visibleRepositories"
@@ -1816,6 +2286,43 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </el-drawer>
+      <div
+        v-if="repoContextMenuVisible"
+        ref="repoContextMenuRef"
+        class="repo-context-menu"
+        :class="repoContextMenuClass"
+        :style="repoContextMenuStyle"
+      >
+        <template v-for="(group, groupIndex) in repoContextMenuOptions" :key="groupIndex">
+          <div v-if="groupIndex > 0" class="repo-context-menu-separator" />
+          <div
+            v-for="option in group"
+            :key="option.code || option.name"
+            class="repo-context-menu-item"
+            :class="{ disabled: option.disabled, loading: option.loading, hasChildren: !!option.children?.length }"
+            @mouseenter="handleRepoContextMenuItemEnter(option, $event)"
+            @click.stop="handleRepoContextMenuOptionClick(option)"
+          >
+            <span class="repo-context-menu-label">{{ option.name }}</span>
+            <span v-if="option.children?.length" class="repo-context-menu-arrow">›</span>
+            <div
+              v-if="option.children?.length"
+              class="repo-context-menu-submenu"
+              :style="getRepoContextMenuSubmenuStyle(option)"
+            >
+              <div
+                v-for="child in option.children"
+                :key="child.code || child.name"
+                class="repo-context-menu-item"
+                :class="{ disabled: child.disabled, loading: child.loading }"
+                @click.stop="handleRepoContextMenuOptionClick(child)"
+              >
+                <span class="repo-context-menu-label">{{ child.name }}</span>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
     </main>
   </el-config-provider>
 </template>
