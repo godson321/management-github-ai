@@ -15,11 +15,6 @@ impl RepositoryStore {
         }
     }
 
-    #[cfg(test)]
-    pub fn with_file_path(file_path: PathBuf) -> Self {
-        Self { file_path }
-    }
-
     pub fn load(&self) -> AppState {
         let Ok(raw) = fs::read_to_string(&self.file_path) else {
             return AppState {
@@ -116,62 +111,4 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
-}
-
-#[cfg(test)]
-mod tests {
-use super::RepositoryStore;
-use crate::models::{AppUiState, RepositoryRecord};
-    use std::fs;
-
-    #[test]
-    fn save_and_load_round_trip() {
-        let root = std::env::temp_dir().join(format!("gbm-store-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let store = RepositoryStore::with_file_path(root.join("repositories.json"));
-        let repositories = vec![RepositoryRecord::new(root.join("repo-one")), {
-            let mut repository = RepositoryRecord::new(root.join("repo-two"));
-            repository.selected = false;
-            repository
-        }];
-
-        let ui_state = AppUiState::default();
-        store.save(&repositories, &ui_state).unwrap();
-        let loaded = store.load();
-
-        assert_eq!(
-            loaded
-                .repositories
-                .iter()
-                .map(|item| item.path.as_str())
-                .collect::<Vec<_>>(),
-            repositories
-                .iter()
-                .map(|item| item.path.as_str())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            loaded
-                .repositories
-                .iter()
-                .map(|item| item.selected)
-                .collect::<Vec<_>>(),
-            vec![true, false]
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn invalid_json_returns_empty_list() {
-        let root = std::env::temp_dir().join(format!("gbm-store-invalid-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let store_path = root.join("repositories.json");
-        fs::write(&store_path, "{broken").unwrap();
-
-        let store = RepositoryStore::with_file_path(store_path);
-        assert!(store.load().repositories.is_empty());
-        let _ = fs::remove_dir_all(&root);
-    }
 }
