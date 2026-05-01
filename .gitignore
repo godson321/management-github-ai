@@ -5,3 +5,9 @@ __pycache__/
 .vscode/
 .DS_Store
 .tmp-tests/
+node_modules/
+target/
+src-tauri/target/
+dist/
+test-results/
+playwright-report/
