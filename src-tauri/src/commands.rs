@@ -43,6 +43,10 @@ pub async fn refresh_repositories(
     let service = GitRepositoryService::new();
     Ok(repositories
         .into_iter()
+        .filter(|repository| {
+            let repository_path = Path::new(&repository.path);
+            repository_path.exists() && repository_path.is_dir()
+        })
         .map(|mut repository| {
             let snapshot = service.get_snapshot(Path::new(&repository.path));
             repository.apply_snapshot(snapshot);
@@ -51,6 +55,93 @@ pub async fn refresh_repositories(
             repository
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::normalize_repository_path;
+    use std::future::Future;
+    use std::path::PathBuf;
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        fn raw_waker() -> RawWaker {
+            fn clone(_: *const ()) -> RawWaker {
+                raw_waker()
+            }
+            fn wake(_: *const ()) {}
+            fn wake_by_ref(_: *const ()) {}
+            fn drop(_: *const ()) {}
+
+            RawWaker::new(
+                std::ptr::null(),
+                &RawWakerVTable::new(clone, wake, wake_by_ref, drop),
+            )
+        }
+
+        let waker = unsafe { Waker::from_raw(raw_waker()) };
+        let mut future = Box::pin(future);
+        let mut context = Context::from_waker(&waker);
+        match Future::poll(future.as_mut(), &mut context) {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("future unexpectedly pending"),
+        }
+    }
+
+    struct TempDirGuard(PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn unique_suffix() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos()
+    }
+
+    #[test]
+    fn refresh_repositories_skips_missing_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "github-batch-manager-refresh-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        std::fs::create_dir_all(root.join("existing")).expect("create temp dir");
+        let _guard = TempDirGuard(root.clone());
+
+        let repositories = vec![
+            RepositoryRecord::new(root.join("missing")),
+            RepositoryRecord::new(root.join("existing")),
+        ];
+
+        let refreshed = block_on(refresh_repositories(repositories)).expect("refresh succeeds");
+
+        assert_eq!(refreshed.len(), 1);
+        assert_eq!(refreshed[0].path, normalize_repository_path(root.join("existing")));
+    }
+
+    #[test]
+    fn refresh_repositories_keeps_existing_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "github-batch-manager-refresh-existing-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        std::fs::create_dir_all(root.join("existing")).expect("create temp dir");
+        let _guard = TempDirGuard(root.clone());
+
+        let repository = RepositoryRecord::new(root.join("existing"));
+
+        let refreshed = block_on(refresh_repositories(vec![repository])).expect("refresh succeeds");
+
+        assert_eq!(refreshed.len(), 1);
+        assert_eq!(refreshed[0].path, normalize_repository_path(root.join("existing")));
+    }
 }
 
 #[tauri::command]

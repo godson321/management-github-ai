@@ -621,6 +621,20 @@ function replaceRepository(repository: RepositoryRecord) {
   }
 }
 
+function removeRepositoriesByPath(paths: string[]) {
+  const removedPaths = new Set(paths);
+  if (!removedPaths.size) {
+    return;
+  }
+
+  repositories.value = repositories.value.filter((repository) => !removedPaths.has(repository.path));
+  if (removedPaths.has(selectedPath.value)) {
+    selectedPath.value = repositories.value[0]?.path || "";
+    selectedCommitHash.value = "";
+  }
+  syncVxeSelection();
+}
+
 function applyRepositories(nextRepositories: RepositoryRecord[]) {
   for (const repository of nextRepositories) {
     replaceRepository(repository);
@@ -656,7 +670,7 @@ function buildExplorerMenuChildren(): ContextMenuOption[] {
     return [{ name: "没有可用菜单项", disabled: true }];
   }
   return explorerMenuItems.value.map((item, index) => ({
-    code: item.isSeparator ? undefined : `explorer:${item.verbIndex}`,
+    code: item.isSeparator || item.verbIndex === null ? undefined : `explorer:${item.verbIndex}`,
     name: item.isSeparator ? "────────" : item.label,
     disabled: item.isSeparator || item.verbIndex === null || busy.value,
     params: { separator: item.isSeparator, index },
@@ -1078,6 +1092,8 @@ async function refreshRepositories(paths: string[] | null = null, manageBusy = t
     const refreshed = await tauriInvoke<RepositoryRecord[]>("refresh_repositories", {
       repositories: targets,
     });
+    const refreshedPaths = new Set(refreshed.map((repository) => repository.path));
+    removeRepositoriesByPath(targets.map((repository) => repository.path).filter((path) => !refreshedPaths.has(path)));
     applyRepositories(refreshed);
     await saveRepositories();
     addActivity(`刷新完成：${refreshed.length} 个仓库。`, "success");
@@ -1125,6 +1141,8 @@ async function runRepositoryAction(
   try {
     if (kind === "refresh") {
       const refreshed = await tauriInvoke<RepositoryRecord[]>(command, args);
+      const refreshedPaths = new Set(refreshed.map((item) => item.path));
+      removeRepositoriesByPath([repository.path].filter((path) => !refreshedPaths.has(path)));
       applyRepositories(refreshed);
       addActivity(`[刷新] ${repository.name} 已刷新。`, "success");
     } else {
@@ -1227,6 +1245,7 @@ async function removeSelected() {
     selectedPath.value = repositories.value[0]?.path || "";
     selectedCommitHash.value = "";
   }
+  syncVxeSelection();
   await saveRepositories();
   addActivity(`已移除 ${selected.size} 个仓库。`, "warning");
 }
