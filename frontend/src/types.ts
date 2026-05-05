@@ -1,8 +1,10 @@
 export type OperationStatus = "idle" | "running" | "success" | "failed" | "skipped";
+export type RepositoryAccessMode = "pullOnly" | "pushOnly" | "pullPush";
 
 export interface RepositoryRecord {
   path: string;
   selected: boolean;
+  accessMode: RepositoryAccessMode;
   name: string;
   branch: string;
   dirty: boolean;

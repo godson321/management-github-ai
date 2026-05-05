@@ -40,11 +40,53 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RepositoryAccessMode {
+    PullOnly,
+    PushOnly,
+    PullPush,
+}
+
+impl Default for RepositoryAccessMode {
+    fn default() -> Self {
+        Self::PullPush
+    }
+}
+
+impl RepositoryAccessMode {
+    pub fn can_pull(self) -> bool {
+        matches!(self, Self::PullOnly | Self::PullPush)
+    }
+
+    pub fn can_push(self) -> bool {
+        matches!(self, Self::PushOnly | Self::PullPush)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PullOnly => "仅拉取",
+            Self::PushOnly => "仅推送",
+            Self::PullPush => "拉取+推送",
+        }
+    }
+
+    pub fn denied_message(self, action: &str) -> &'static str {
+        match (self, action) {
+            (Self::PullOnly, "push") => "仅允许拉取",
+            (Self::PushOnly, "pull") => "仅允许推送",
+            _ => "当前项目不允许执行此操作",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryRecord {
     pub path: String,
     pub selected: bool,
+    #[serde(default)]
+    pub access_mode: RepositoryAccessMode,
     pub name: String,
     pub branch: String,
     pub dirty: bool,
@@ -75,6 +117,7 @@ impl RepositoryRecord {
         Self {
             path: normalized,
             selected: true,
+            access_mode: RepositoryAccessMode::default(),
             name,
             branch: String::new(),
             dirty: false,
@@ -264,6 +307,7 @@ fn default_repository_columns() -> Vec<String> {
         "dirty",
         "ahead",
         "behind",
+        "accessMode",
         "lastCommit",
         "lastOperationStatus",
         "statusMessage",
@@ -279,6 +323,8 @@ pub struct StoredRepositoryRecord {
     pub path: String,
     #[serde(default = "default_selected")]
     pub selected: bool,
+    #[serde(default)]
+    pub access_mode: RepositoryAccessMode,
 }
 
 fn default_selected() -> bool {
@@ -290,6 +336,7 @@ impl From<&RepositoryRecord> for StoredRepositoryRecord {
         Self {
             path: repository.path.clone(),
             selected: repository.selected,
+            access_mode: repository.access_mode,
         }
     }
 }
@@ -298,6 +345,33 @@ impl From<StoredRepositoryRecord> for RepositoryRecord {
     fn from(stored: StoredRepositoryRecord) -> Self {
         let mut repository = RepositoryRecord::new(stored.path);
         repository.selected = stored.selected;
+        repository.access_mode = stored.access_mode;
         repository
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_record_defaults_to_pull_push_access_mode() {
+        let repository = RepositoryRecord::new("C:/repo");
+
+        assert_eq!(repository.access_mode, RepositoryAccessMode::PullPush);
+    }
+
+    #[test]
+    fn stored_repository_record_missing_access_mode_defaults_to_pull_push() {
+        let stored: StoredRepositoryRecord = serde_json::from_value(serde_json::json!({
+            "path": "C:/repo",
+            "selected": false
+        }))
+        .expect("deserialize stored repository");
+
+        let repository = RepositoryRecord::from(stored);
+
+        assert_eq!(repository.access_mode, RepositoryAccessMode::PullPush);
+        assert!(!repository.selected);
     }
 }

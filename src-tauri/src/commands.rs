@@ -151,6 +151,15 @@ pub async fn pull_repositories(
     strategy: String,
 ) -> Result<Vec<RepositoryOperationResult>, String> {
     run_batch(app, repositories, "pull", |service, repository| {
+        if !repository.access_mode.can_pull() {
+            return OperationResult {
+                repository_path: repository.path.clone(),
+                repository_name: repository.name.clone(),
+                action: "pull".to_string(),
+                status: "skipped".to_string(),
+                message: repository.access_mode.denied_message("pull").to_string(),
+            };
+        }
         service.pull(Path::new(&repository.path), &repository.name, &strategy)
     })
 }
@@ -172,6 +181,15 @@ pub async fn push_repositories(
     repositories: Vec<RepositoryRecord>,
 ) -> Result<Vec<RepositoryOperationResult>, String> {
     run_batch(app, repositories, "push", |service, repository| {
+        if !repository.access_mode.can_push() {
+            return OperationResult {
+                repository_path: repository.path.clone(),
+                repository_name: repository.name.clone(),
+                action: "push".to_string(),
+                status: "skipped".to_string(),
+                message: repository.access_mode.denied_message("push").to_string(),
+            };
+        }
         service.push(Path::new(&repository.path), &repository.name)
     })
 }
