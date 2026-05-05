@@ -27,6 +27,7 @@ import type {
   GitLogEntry,
   GitLogResult,
   OperationStatus,
+  RepositoryAccessMode,
   RepositoryOperationResult,
   RepositoryRecord,
   WindowsExplorerMenuItem,
@@ -101,6 +102,7 @@ type RepositoryColumnKey =
   | "dirty"
   | "ahead"
   | "behind"
+  | "accessMode"
   | "lastCommit"
   | "lastOperationStatus"
   | "statusMessage";
@@ -121,6 +123,7 @@ const repositoryColumnDefinitions: RepositoryColumnDefinition[] = [
   { key: "dirty", title: "改动", width: 76, minWidth: 54, align: "center", sortable: true },
   { key: "ahead", title: "领先", width: 72, minWidth: 54, align: "center", sortable: true },
   { key: "behind", title: "落后", width: 72, minWidth: 54, align: "center", sortable: true },
+  { key: "accessMode", title: "权限", width: 108, minWidth: 86, align: "center" },
   { key: "lastCommit", title: "最新提交", minWidth: 150, sortable: true },
   { key: "lastOperationStatus", title: "结果", width: 82, minWidth: 54, align: "center" },
   { key: "statusMessage", title: "状态", minWidth: 150, sortable: true },
@@ -268,9 +271,18 @@ const pullStrategyOptions: Array<{ label: string; value: "merge" | "ff_only" | "
   { label: "变基拉取", value: "rebase" },
 ];
 
+const repositoryAccessModeOptions: Array<{ label: string; value: RepositoryAccessMode }> = [
+  { label: "仅拉取", value: "pullOnly" },
+  { label: "仅推送", value: "pushOnly" },
+  { label: "拉取 + 推送", value: "pullPush" },
+];
+
 const selectedRepositories = computed(() =>
   repositories.value.filter((repository) => repository.selected),
 );
+
+const selectedRepositoriesCanPull = computed(() => selectedRepositories.value.some(canPull));
+const selectedRepositoriesCanPush = computed(() => selectedRepositories.value.some(canPush));
 
 const selectedRepository = computed(
   () => repositories.value.find((repository) => repository.path === selectedPath.value) ?? null,
@@ -376,15 +388,15 @@ const repoContextMenuOptions = computed<ContextMenuOption[][]>(() => {
       { code: "refresh", name: "刷新", disabled: busy.value || !repository },
       {
         name: "拉取",
-        disabled: busy.value || !repository,
+        disabled: busy.value || !repository || !canPull(repository),
         children: pullStrategyOptions.map((option) => ({
           code: `pull:${option.value}`,
           name: option.label,
-          disabled: busy.value || !repository,
+          disabled: busy.value || !repository || !canPull(repository),
         })),
       },
       { code: "commit", name: "提交...", disabled: busy.value || !repository },
-      { code: "push", name: "推送", disabled: busy.value || !repository },
+      { code: "push", name: "推送", disabled: busy.value || !repository || !canPush(repository) },
     ],
     [
       {
@@ -445,6 +457,7 @@ function normalizeRepositoryPathForDisplay(path: string) {
 function normalizeRepository(repository: RepositoryRecord): RepositoryRecord {
   return {
     ...repository,
+    accessMode: repository.accessMode ?? "pullPush",
     path: normalizeRepositoryPathForDisplay(repository.path),
   };
 }
@@ -572,6 +585,18 @@ function statusLabel(status: string) {
   );
 }
 
+function canPull(repository: RepositoryRecord) {
+  return repository.accessMode !== "pushOnly";
+}
+
+function canPush(repository: RepositoryRecord) {
+  return repository.accessMode !== "pullOnly";
+}
+
+function repositoryAccessModeLabel(accessMode: RepositoryAccessMode) {
+  return repositoryAccessModeOptions.find((option) => option.value === accessMode)?.label || "拉取 + 推送";
+}
+
 function activityLevel(status: string): ActivityItem["level"] {
   if (status === "success") {
     return "success";
@@ -606,6 +631,23 @@ function selectRepository(repository: RepositoryRecord) {
 function toggleRepository(repository: RepositoryRecord, selected: boolean) {
   repository.selected = selected;
   saveRepositories().catch((error) => handleError("保存选择状态失败", error));
+}
+
+function updateRepositoryAccessMode(path: string, accessMode: RepositoryAccessMode) {
+  const repository = repositories.value.find((item) => item.path === path);
+  if (!repository) {
+    return;
+  }
+  repository.accessMode = accessMode;
+  saveRepositories().catch((error) => handleError("保存权限状态失败", error));
+}
+
+function updateSelectedRepositoryAccessMode(accessMode: RepositoryAccessMode) {
+  const repository = selectedRepository.value;
+  if (!repository) {
+    return;
+  }
+  updateRepositoryAccessMode(repository.path, accessMode);
 }
 
 function replaceRepository(repository: RepositoryRecord) {
@@ -2010,7 +2052,7 @@ onBeforeUnmount(() => {
             :width="180"
           >
             <template #reference>
-              <el-button id="pullButton" :icon="Download" :disabled="busy">
+              <el-button id="pullButton" :icon="Download" :disabled="busy || !selectedRepositoriesCanPull">
                 批量拉取
               </el-button>
             </template>
@@ -2020,7 +2062,7 @@ onBeforeUnmount(() => {
                 :key="option.value"
                 type="button"
                 class="pull-strategy-item"
-                :disabled="busy"
+                :disabled="busy || !selectedRepositoriesCanPull"
                 @click="runOperation('pull', option.value)"
               >
                 {{ option.label }}
@@ -2030,7 +2072,7 @@ onBeforeUnmount(() => {
           <el-button id="commitButton" :icon="Check" :disabled="busy" @click="runOperation('commit')">
             批量提交
           </el-button>
-          <el-button id="pushButton" :icon="Upload" :disabled="busy" @click="runOperation('push')">
+          <el-button id="pushButton" :icon="Upload" :disabled="busy || !selectedRepositoriesCanPush" @click="runOperation('push')">
             批量推送
           </el-button>
           <el-divider direction="vertical" />
@@ -2131,6 +2173,9 @@ onBeforeUnmount(() => {
                       <el-tag v-else-if="column.key === 'dirty'" :type="row.dirty ? 'warning' : 'success'" effect="light" round>
                         {{ row.dirty ? "有" : "净" }}
                       </el-tag>
+                      <el-tag v-else-if="column.key === 'accessMode'" effect="light" round>
+                        {{ repositoryAccessModeLabel(row.accessMode) }}
+                      </el-tag>
                       <span v-else-if="column.key === 'lastCommit'">
                         {{ row.lastCommit || "-" }}
                         <small v-if="row.lastCommitAge" class="commit-age">{{ row.lastCommitAge }}</small>
@@ -2182,6 +2227,21 @@ onBeforeUnmount(() => {
                   <el-descriptions-item label="分支">{{ selectedRepository.branch || "-" }}</el-descriptions-item>
                   <el-descriptions-item label="同步">
                     领先 {{ selectedRepository.ahead || 0 }}，落后 {{ selectedRepository.behind || 0 }}
+                  </el-descriptions-item>
+                  <el-descriptions-item label="权限">
+                    <el-select
+                      :model-value="selectedRepository.accessMode"
+                      size="small"
+                      :disabled="busy"
+                      @change="(value: RepositoryAccessMode) => updateSelectedRepositoryAccessMode(value)"
+                    >
+                      <el-option
+                        v-for="option in repositoryAccessModeOptions"
+                        :key="option.value"
+                        :label="option.label"
+                        :value="option.value"
+                      />
+                    </el-select>
                   </el-descriptions-item>
                   <el-descriptions-item label="状态">{{ selectedRepository.statusMessage || "-" }}</el-descriptions-item>
                   <el-descriptions-item v-if="selectedRepository.lastErrorMessage" label="错误">

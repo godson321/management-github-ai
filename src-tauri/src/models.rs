@@ -63,14 +63,6 @@ impl RepositoryAccessMode {
         matches!(self, Self::PushOnly | Self::PullPush)
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::PullOnly => "仅拉取",
-            Self::PushOnly => "仅推送",
-            Self::PullPush => "拉取+推送",
-        }
-    }
-
     pub fn denied_message(self, action: &str) -> &'static str {
         match (self, action) {
             (Self::PullOnly, "push") => "仅允许拉取",
