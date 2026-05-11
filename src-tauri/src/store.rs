@@ -24,6 +24,7 @@ impl RepositoryStore {
         };
 
         let Ok(payload) = serde_json::from_str::<Value>(&raw) else {
+            let _ = self.backup_invalid_store("invalid", &raw);
             return AppState {
                 repositories: Vec::new(),
                 ui_state: AppUiState::default(),
@@ -87,10 +88,31 @@ impl RepositoryStore {
             serde_json::to_string_pretty(&serialized).expect("store payload should serialize"),
         )?;
         if self.file_path.exists() {
-            fs::remove_file(&self.file_path)?;
+            let backup_path = self.file_path.with_extension("bak");
+            let _ = fs::remove_file(&backup_path);
+            fs::rename(&self.file_path, &backup_path)?;
+            match fs::rename(&temp_path, &self.file_path) {
+                Ok(()) => {
+                    let _ = fs::remove_file(backup_path);
+                }
+                Err(error) => {
+                    let _ = fs::rename(&backup_path, &self.file_path);
+                    let _ = fs::remove_file(&temp_path);
+                    return Err(error);
+                }
+            }
+        } else {
+            fs::rename(temp_path, &self.file_path)?;
         }
-        fs::rename(temp_path, &self.file_path)?;
         Ok(())
+    }
+
+    fn backup_invalid_store(&self, suffix: &str, raw: &str) -> io::Result<()> {
+        if let Some(parent) = self.file_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let backup_path = self.file_path.with_extension(format!("{suffix}.json"));
+        fs::write(backup_path, raw)
     }
 }
 
@@ -111,4 +133,86 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::RepositoryRecord;
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "github-batch-manager-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock before unix epoch")
+                .as_nanos()
+        ))
+    }
+
+    struct TempDirGuard(PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn load_preserves_old_file_visibility_for_invalid_json() {
+        let root = unique_temp_dir("store");
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let _guard = TempDirGuard(root.clone());
+        let store_path = root.join("repositories.json");
+
+        std::fs::write(&store_path, "{invalid json").expect("write invalid store");
+
+        let store = RepositoryStore {
+            file_path: store_path,
+        };
+
+        let state = store.load();
+
+        assert!(state.repositories.is_empty());
+        assert_eq!(state.ui_state, AppUiState::default());
+    }
+
+    #[test]
+    fn load_keeps_backup_of_invalid_store_file() {
+        let root = unique_temp_dir("store-invalid");
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let _guard = TempDirGuard(root.clone());
+        let store_path = root.join("repositories.json");
+
+        std::fs::write(&store_path, "{invalid json").expect("write invalid store");
+
+        let store = RepositoryStore {
+            file_path: store_path.clone(),
+        };
+
+        let _state = store.load();
+
+        let backup_path = root.join("repositories.invalid.json");
+        assert!(backup_path.exists(), "invalid payload should be backed up");
+    }
+
+    #[test]
+    fn save_writes_recoverable_store_payload() {
+        let root = unique_temp_dir("store-save");
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let _guard = TempDirGuard(root.clone());
+        let store_path = root.join("repositories.json");
+        let store = RepositoryStore {
+            file_path: store_path.clone(),
+        };
+
+        store
+            .save(&[RepositoryRecord::new("C:/repo")], &AppUiState::default())
+            .expect("save state");
+
+        let raw = std::fs::read_to_string(store_path).expect("read store");
+        assert!(raw.contains("\"repositories\""));
+        assert!(raw.contains("\"uiState\"") || raw.contains("\"ui_state\""));
+    }
 }

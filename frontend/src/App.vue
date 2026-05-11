@@ -67,6 +67,8 @@ const repoContextMenuSubmenuSide = ref<"left" | "right">("right");
 const repoContextMenuSubmenuVerticalSide = ref<"up" | "down">("down");
 let activityId = 0;
 let explorerMenuRequestId = 0;
+let logRequestId = 0;
+let commitViewRequestId = 0;
 
 type RepositoryActionKind = "refresh" | "pull" | "commit" | "push";
 type PullStrategy = "merge" | "ff_only" | "rebase";
@@ -1301,25 +1303,39 @@ async function loadLogs() {
   }
 
   const tauriInvoke = ensureTauri();
+  const repositoryPath = repository.path;
+  const requestId = ++logRequestId;
   setBusy(true, "正在加载日志树...");
   try {
     const result = await tauriInvoke<GitLogResult>("load_log_entries", {
-      path: repository.path,
+      path: repositoryPath,
       limit: 120,
     });
-    repository.logEntries = result.entries || [];
-    repository.logMessage = result.message || "";
-    selectedCommitHash.value = repository.logEntries[0]?.commitHash || "";
-    repository.selectedCommitHash = selectedCommitHash.value;
+    if (requestId !== logRequestId) {
+      return;
+    }
+    const currentRepository = repositories.value.find((item) => item.path === repositoryPath);
+    if (!currentRepository) {
+      return;
+    }
+    currentRepository.logEntries = result.entries || [];
+    currentRepository.logMessage = result.message || "";
+    if (selectedPath.value === repositoryPath) {
+      selectedCommitHash.value = currentRepository.logEntries[0]?.commitHash || "";
+    }
+    currentRepository.selectedCommitHash = currentRepository.logEntries[0]?.commitHash || "";
     statusText.value = result.message || "日志树已更新";
     activeTab.value = "logs";
-    if (selectedCommitHash.value) {
-      await loadCommitView(selectedCommitHash.value);
+    const initialCommitHash = currentRepository.selectedCommitHash;
+    if (initialCommitHash) {
+      await loadCommitView(repositoryPath, initialCommitHash);
     }
   } catch (error) {
     handleError("加载日志失败", error);
   } finally {
-    setBusy(false);
+    if (requestId === logRequestId) {
+      setBusy(false);
+    }
   }
 }
 
@@ -1331,29 +1347,41 @@ async function selectCommit(entry: GitLogEntry) {
   selectedCommitHash.value = entry.commitHash;
   repository.selectedCommitHash = entry.commitHash;
   activeTab.value = "commit";
-  await loadCommitView(entry.commitHash);
+  await loadCommitView(repository.path, entry.commitHash);
 }
 
-async function loadCommitView(commitHash: string) {
-  const repository = selectedRepository.value;
-  if (!repository || !commitHash) {
+async function loadCommitView(repositoryPath: string, commitHash: string) {
+  if (!repositoryPath || !commitHash) {
     return;
   }
 
   const tauriInvoke = ensureTauri();
+  const requestId = ++commitViewRequestId;
   setBusy(true, "正在加载提交详情...");
   try {
     const view = await tauriInvoke<GitCommitView>("load_commit_view", {
-      path: repository.path,
+      path: repositoryPath,
       commitHash,
     });
+    if (requestId !== commitViewRequestId) {
+      return;
+    }
+    const repository = repositories.value.find((item) => item.path === repositoryPath);
+    if (!repository) {
+      return;
+    }
     repository.commitDetailText = view.detailText || "";
     repository.commitChangedFiles = view.files || [];
+    if (selectedPath.value === repositoryPath) {
+      selectedCommitHash.value = commitHash;
+    }
     statusText.value = "提交详情已加载";
   } catch (error) {
     handleError("加载提交详情失败", error);
   } finally {
-    setBusy(false);
+    if (requestId === commitViewRequestId) {
+      setBusy(false);
+    }
   }
 }
 

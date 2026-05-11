@@ -1,5 +1,5 @@
 use crate::models::normalize_repository_path;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -37,11 +37,28 @@ pub fn discover(raw_paths: &[String]) -> Vec<PathBuf> {
 
 fn walk_for_repositories(root_path: &Path) -> Vec<PathBuf> {
     let mut repositories = Vec::new();
-    walk(root_path, &mut repositories);
+    let mut visited = BTreeSet::new();
+    walk(root_path, &mut repositories, &mut visited, 0);
     repositories
 }
 
-fn walk(current_path: &Path, repositories: &mut Vec<PathBuf>) {
+const MAX_SCAN_DEPTH: usize = 12;
+
+fn walk(
+    current_path: &Path,
+    repositories: &mut Vec<PathBuf>,
+    visited: &mut BTreeSet<String>,
+    depth: usize,
+) {
+    if depth > MAX_SCAN_DEPTH {
+        return;
+    }
+
+    let normalized = normalize_repository_path(current_path);
+    if !visited.insert(normalized) {
+        return;
+    }
+
     if is_git_repository(current_path) {
         repositories.push(current_path.to_path_buf());
         return;
@@ -65,7 +82,7 @@ fn walk(current_path: &Path, repositories: &mut Vec<PathBuf>) {
             continue;
         }
 
-        walk(&path, repositories);
+        walk(&path, repositories, visited, depth + 1);
     }
 }
 
@@ -76,4 +93,42 @@ fn is_git_repository(candidate: &Path) -> bool {
 
     let dot_git = candidate.join(".git");
     dot_git.is_dir() || dot_git.is_file()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "github-batch-manager-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock before unix epoch")
+                .as_nanos()
+        ))
+    }
+
+    struct TempDirGuard(PathBuf);
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn discover_deduplicates_case_insensitive_paths_on_windows_style_input() {
+        let root = unique_temp_dir("discover");
+        std::fs::create_dir_all(root.join(".git")).expect("create repository");
+        let _guard = TempDirGuard(root.clone());
+
+        let upper = root.to_string_lossy().to_uppercase();
+        let lower = root.to_string_lossy().to_lowercase();
+
+        let discovered = discover(&[upper, lower]);
+
+        assert_eq!(discovered.len(), 1);
+    }
 }

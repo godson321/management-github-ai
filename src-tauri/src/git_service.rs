@@ -60,7 +60,7 @@ impl<R: GitCommandRunner> GitRepositoryService<R> {
     pub fn get_snapshot(&self, repository_path: &Path) -> RepositorySnapshot {
         let status_result = self
             .runner
-            .run(repository_path, &["status", "--short", "--branch"]);
+            .run(repository_path, &["status", "--porcelain=v1", "--branch"]);
         if status_result.returncode != 0 {
             return RepositorySnapshot::empty(format_error(&status_result, "无法读取仓库状态"));
         }
@@ -413,7 +413,7 @@ pub fn parse_status_output(output: &str) -> RepositorySnapshot {
 
     RepositorySnapshot {
         branch,
-        dirty: lines.len() > 1,
+        dirty: lines.iter().skip(1).any(|line| !line.trim().is_empty()),
         ahead,
         behind,
         last_commit: String::new(),
@@ -581,12 +581,30 @@ pub fn parse_numstat_output(output: &str) -> Vec<(String, String, String)> {
                 return None;
             }
             Some((
-                parts[2].to_string(),
+                normalize_numstat_path(parts[2]),
                 parts[0].to_string(),
                 parts[1].to_string(),
             ))
         })
         .collect()
+}
+
+fn normalize_numstat_path(raw_path: &str) -> String {
+    if let (Some(start), Some(end)) = (raw_path.find('{'), raw_path.rfind('}')) {
+        if start < end {
+            let prefix = &raw_path[..start];
+            let inner = &raw_path[start + 1..end];
+            if let Some((from, to)) = inner.split_once(" => ") {
+                return format!("{prefix}{from} -> {prefix}{to}");
+            }
+        }
+    }
+
+    if let Some((from, to)) = raw_path.split_once(" => ") {
+        return format!("{from} -> {to}");
+    }
+
+    raw_path.to_string()
 }
 
 pub fn map_status_code(status_code: char) -> String {
@@ -608,5 +626,97 @@ pub fn build_pull_args(strategy: &str) -> Vec<String> {
         "ff_only" => vec!["pull".to_string(), "--ff-only".to_string()],
         "rebase" => vec!["pull".to_string(), "--rebase".to_string()],
         _ => vec!["pull".to_string(), "--no-rebase".to_string()],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    #[test]
+    fn parse_status_output_supports_porcelain_branch_metadata() {
+        let snapshot = parse_status_output(
+            "## main...origin/main [ahead 2, behind 1]\n M src/main.rs\n?? notes.txt\n",
+        );
+
+        assert_eq!(snapshot.branch, "main");
+        assert!(snapshot.dirty);
+        assert_eq!(snapshot.ahead, 2);
+        assert_eq!(snapshot.behind, 1);
+    }
+
+    #[test]
+    fn parse_numstat_output_normalizes_rename_paths() {
+        let parsed = parse_numstat_output("1\t0\ta.txt => b.txt\n");
+
+        assert_eq!(
+            parsed,
+            vec![("a.txt -> b.txt".to_string(), "1".to_string(), "0".to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_numstat_output_normalizes_brace_rename_paths() {
+        let parsed = parse_numstat_output("1\t0\tsrc/{old.ts => new.ts}\n");
+
+        assert_eq!(
+            parsed,
+            vec![(
+                "src/old.ts -> src/new.ts".to_string(),
+                "1".to_string(),
+                "0".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn get_snapshot_uses_porcelain_status_command() {
+        struct RecordingRunner {
+            calls: RefCell<Vec<Vec<String>>>,
+            responses: RefCell<VecDeque<CommandResult>>,
+        }
+
+        impl GitCommandRunner for RecordingRunner {
+            fn run(&self, _repository_path: &Path, args: &[&str]) -> CommandResult {
+                self.calls
+                    .borrow_mut()
+                    .push(args.iter().map(|item| (*item).to_string()).collect());
+                self.responses
+                    .borrow_mut()
+                    .pop_front()
+                    .expect("recorded response")
+            }
+        }
+
+        let runner = RecordingRunner {
+            calls: RefCell::new(Vec::new()),
+            responses: RefCell::new(VecDeque::from([
+                CommandResult {
+                    returncode: 0,
+                    stdout: "## main\n".to_string(),
+                    stderr: String::new(),
+                },
+                CommandResult {
+                    returncode: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+            ])),
+        };
+        let service = GitRepositoryService { runner };
+
+        let _snapshot = service.get_snapshot(Path::new("C:/repo"));
+
+        let calls = service.runner.calls.borrow();
+        assert_eq!(
+            calls.first(),
+            Some(&vec![
+                "status".to_string(),
+                "--porcelain=v1".to_string(),
+                "--branch".to_string()
+            ])
+        );
     }
 }
